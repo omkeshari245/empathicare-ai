@@ -14,7 +14,126 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      game_scores: {
+        Row: {
+          completed: boolean | null
+          created_at: string
+          duration_minutes: number | null
+          game_id: string
+          id: string
+          score: number
+          user_id: string
+        }
+        Insert: {
+          completed?: boolean | null
+          created_at?: string
+          duration_minutes?: number | null
+          game_id: string
+          id?: string
+          score?: number
+          user_id: string
+        }
+        Update: {
+          completed?: boolean | null
+          created_at?: string
+          duration_minutes?: number | null
+          game_id?: string
+          id?: string
+          score?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      mood_entries: {
+        Row: {
+          created_at: string
+          energy_level: number
+          hydration: number | null
+          id: string
+          mood: string
+          notes: string | null
+          sleep_quality: number
+          stress_level: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          energy_level: number
+          hydration?: number | null
+          id?: string
+          mood: string
+          notes?: string | null
+          sleep_quality: number
+          stress_level: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          energy_level?: number
+          hydration?: number | null
+          id?: string
+          mood?: string
+          notes?: string | null
+          sleep_quality?: number
+          stress_level?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      peer_support_posts: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          is_anonymous: boolean | null
+          likes_count: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          is_anonymous?: boolean | null
+          likes_count?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          is_anonymous?: boolean | null
+          likes_count?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          id: string
+          updated_at: string
+          username: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          id: string
+          updated_at?: string
+          username: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          id?: string
+          updated_at?: string
+          username?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
