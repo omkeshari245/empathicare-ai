@@ -1,15 +1,26 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Gamepad2, Target, Puzzle, Waves, Brain, Music, CheckCircle, Star, Trophy } from "lucide-react";
 import { Link } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 
 const Gamification = () => {
+  const { user } = useAuth();
+  const { toast } = useToast();
   const [activeGame, setActiveGame] = useState<string | null>(null);
   const [breathingCount, setBreathingCount] = useState(0);
   const [sequenceGame, setSequenceGame] = useState<number[]>([]);
   const [userSequence, setUserSequence] = useState<number[]>([]);
   const [puzzleScore, setPuzzleScore] = useState(0);
+  const [gameStats, setGameStats] = useState({
+    gamesPlayed: 0,
+    stressReduced: 0,
+    streak: 0,
+    totalMinutes: 0
+  });
 
   const games = [
     {
@@ -85,21 +96,83 @@ const Gamification = () => {
     }
   ];
 
-  const weeklyStats = {
-    gamesPlayed: 12,
-    stressReduced: 78, // percentage
-    streak: 5,
-    totalMinutes: 156
+  useEffect(() => {
+    const fetchGameStats = async () => {
+      if (user) {
+        const { data } = await supabase
+          .from('game_scores')
+          .select('*')
+          .eq('user_id', user.id);
+        
+        if (data) {
+          const gamesPlayed = data.length;
+          const totalMinutes = data.reduce((acc, game) => acc + (game.duration_minutes || 0), 0);
+          const completedGames = data.filter(g => g.completed).length;
+          const stressReduced = gamesPlayed > 0 ? Math.round((completedGames / gamesPlayed) * 100) : 0;
+          
+          setGameStats({
+            gamesPlayed,
+            stressReduced,
+            streak: 5, // You could calculate actual streak based on dates
+            totalMinutes
+          });
+        }
+      }
+    };
+
+    fetchGameStats();
+  }, [user]);
+
+  const saveGameScore = async (gameId: string, score: number, completed: boolean, duration: number) => {
+    if (!user) {
+      toast({
+        title: "Authentication required",
+        description: "Please sign in to save your progress",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    await supabase.from('game_scores').insert({
+      user_id: user.id,
+      game_id: gameId,
+      score,
+      completed,
+      duration_minutes: duration
+    });
+
+    // Refresh stats
+    const { data } = await supabase
+      .from('game_scores')
+      .select('*')
+      .eq('user_id', user.id);
+    
+    if (data) {
+      const gamesPlayed = data.length;
+      const totalMinutes = data.reduce((acc, game) => acc + (game.duration_minutes || 0), 0);
+      const completedGames = data.filter(g => g.completed).length;
+      const stressReduced = gamesPlayed > 0 ? Math.round((completedGames / gamesPlayed) * 100) : 0;
+      
+      setGameStats({
+        gamesPlayed,
+        stressReduced,
+        streak: 5,
+        totalMinutes
+      });
+    }
   };
 
   const startBreathingGame = () => {
     setActiveGame("breathing-garden");
     setBreathingCount(0);
+    const startTime = Date.now();
     
     const breathingCycle = setInterval(() => {
       setBreathingCount(prev => {
         if (prev >= 10) {
           clearInterval(breathingCycle);
+          const duration = Math.round((Date.now() - startTime) / 60000);
+          saveGameScore("breathing-garden", 10, true, duration);
           setActiveGame(null);
           return 0;
         }
@@ -123,6 +196,7 @@ const Gamification = () => {
       const isCorrect = newUserSequence.every((num, idx) => num === sequenceGame[idx]);
       if (isCorrect) {
         setPuzzleScore(prev => prev + 10);
+        saveGameScore("memory-calm", puzzleScore + 10, true, 2);
       }
       setTimeout(() => {
         setActiveGame(null);
@@ -175,7 +249,7 @@ const Gamification = () => {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Games Played</p>
-                <p className="text-2xl font-bold">{weeklyStats.gamesPlayed}</p>
+                <p className="text-2xl font-bold">{gameStats.gamesPlayed}</p>
               </div>
             </div>
           </Card>
@@ -187,7 +261,7 @@ const Gamification = () => {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Stress Reduced</p>
-                <p className="text-2xl font-bold">{weeklyStats.stressReduced}%</p>
+                <p className="text-2xl font-bold">{gameStats.stressReduced}%</p>
               </div>
             </div>
           </Card>
@@ -199,7 +273,7 @@ const Gamification = () => {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Daily Streak</p>
-                <p className="text-2xl font-bold">{weeklyStats.streak} days</p>
+                <p className="text-2xl font-bold">{gameStats.streak} days</p>
               </div>
             </div>
           </Card>
@@ -211,7 +285,7 @@ const Gamification = () => {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Time Played</p>
-                <p className="text-2xl font-bold">{weeklyStats.totalMinutes}m</p>
+                <p className="text-2xl font-bold">{gameStats.totalMinutes}m</p>
               </div>
             </div>
           </Card>
