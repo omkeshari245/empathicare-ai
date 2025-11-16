@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Heart, Send, ArrowLeft, AlertTriangle, Phone } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Message {
   id: string;
@@ -42,17 +43,125 @@ const Chat = () => {
     return crisisKeywords.some(keyword => message.toLowerCase().includes(keyword));
   };
 
-  const generateAIResponse = (userMessage: string): string => {
-    // Mock AI responses - in real app this would call GPT-4o API
-    const responses = [
-      "Thank you for sharing that with me. It takes courage to open up about how you're feeling. Can you tell me more about what's been on your mind?",
-      "I hear you, and your feelings are completely valid. Many young people go through similar experiences. What would help you feel a bit better right now?",
-      "That sounds really challenging. Remember that you're stronger than you know, and it's okay to feel this way. Have you tried any coping strategies that have helped before?",
-      "I'm glad you felt comfortable sharing that with me. Your mental health journey is unique, and every small step forward matters. What's one thing that brought you even a tiny bit of joy recently?",
-      "It's okay to not be okay sometimes. You're taking a positive step by talking about it. Would you like to try a brief breathing exercise together, or would you prefer to keep talking?"
-    ];
+  const streamChat = async (userMessage: string) => {
+    const CHAT_URL = `https://pifqddvdfrsqmlbvhqlr.supabase.co/functions/v1/chat`;
     
-    return responses[Math.floor(Math.random() * responses.length)];
+    try {
+      const resp = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        },
+        body: JSON.stringify({ 
+          messages: [
+            ...messages.filter(m => !m.isUser || m.content !== userMessage).map(m => ({
+              role: m.isUser ? "user" : "assistant",
+              content: m.content
+            })),
+            { role: "user", content: userMessage }
+          ] 
+        }),
+      });
+
+      if (!resp.ok) {
+        const errorData = await resp.json().catch(() => ({ error: "Unknown error" }));
+        
+        if (resp.status === 429) {
+          toast({
+            title: "Rate Limit Exceeded",
+            description: "Too many requests. Please try again in a moment.",
+            variant: "destructive",
+          });
+        } else if (resp.status === 402) {
+          toast({
+            title: "Service Unavailable",
+            description: "AI service requires payment. Please contact support.",
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Error",
+            description: errorData.error || "Failed to get AI response",
+            variant: "destructive",
+          });
+        }
+        
+        setIsTyping(false);
+        return;
+      }
+
+      if (!resp.body) throw new Error("No response body");
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let textBuffer = "";
+      let streamDone = false;
+      let assistantContent = "";
+
+      // Create initial assistant message
+      const assistantMessageId = (Date.now() + 1).toString();
+      
+      while (!streamDone) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        textBuffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+          let line = textBuffer.slice(0, newlineIndex);
+          textBuffer = textBuffer.slice(newlineIndex + 1);
+
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          if (line.startsWith(":") || line.trim() === "") continue;
+          if (!line.startsWith("data: ")) continue;
+
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === "[DONE]") {
+            streamDone = true;
+            break;
+          }
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+            if (content) {
+              assistantContent += content;
+              
+              setMessages(prev => {
+                const lastMessage = prev[prev.length - 1];
+                if (lastMessage?.id === assistantMessageId) {
+                  return prev.map(m => 
+                    m.id === assistantMessageId 
+                      ? { ...m, content: assistantContent }
+                      : m
+                  );
+                }
+                return [...prev, {
+                  id: assistantMessageId,
+                  content: assistantContent,
+                  isUser: false,
+                  timestamp: new Date(),
+                }];
+              });
+            }
+          } catch {
+            textBuffer = line + "\n" + textBuffer;
+            break;
+          }
+        }
+      }
+
+      setIsTyping(false);
+    } catch (e) {
+      console.error("Stream error:", e);
+      toast({
+        title: "Connection Error",
+        description: "Failed to connect to AI service",
+        variant: "destructive",
+      });
+      setIsTyping(false);
+    }
   };
 
   const sendMessage = async () => {
@@ -66,11 +175,12 @@ const Chat = () => {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const messageText = inputValue;
     setInputValue("");
     setIsTyping(true);
 
     // Check for crisis keywords
-    if (detectCrisisKeywords(inputValue)) {
+    if (detectCrisisKeywords(messageText)) {
       toast({
         title: "Crisis Support Available",
         description: "I've detected you might be in distress. Professional help is available 24/7.",
@@ -78,18 +188,7 @@ const Chat = () => {
       });
     }
 
-    // Simulate AI thinking time
-    setTimeout(() => {
-      const aiResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        content: generateAIResponse(inputValue),
-        isUser: false,
-        timestamp: new Date(),
-      };
-
-      setMessages(prev => [...prev, aiResponse]);
-      setIsTyping(false);
-    }, 1500);
+    await streamChat(messageText);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
