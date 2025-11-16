@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Calendar, TrendingUp, Heart, Activity, BarChart3, Droplets, Moon } from "lucide-react";
@@ -6,6 +6,8 @@ import { Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from "recharts";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
+import { supabase } from "@/integrations/supabase/client";
+import { useNavigate } from "react-router-dom";
 
 interface MoodEntry {
   id: string;
@@ -60,38 +62,52 @@ const Mood = () => {
   const [sleepQuality, setSleepQuality] = useState<number>(3);
   const [stressLevel, setStressLevel] = useState<number>(3);
   const [hydrationLevel, setHydrationLevel] = useState<number>(85);
-  const [moodHistory, setMoodHistory] = useState<MoodEntry[]>([
-    {
-      id: "1",
-      mood: "good",
-      emoji: "😊",
-      date: new Date(Date.now() - 86400000),
-      note: "Had a nice chat with a friend",
-      energy: 4,
-      sleep: 3,
-      stress: 2
-    },
-    {
-      id: "2", 
-      mood: "okay",
-      emoji: "😐",
-      date: new Date(Date.now() - 172800000),
-      energy: 3,
-      sleep: 2,
-      stress: 3
-    },
-    {
-      id: "3",
-      mood: "amazing",
-      emoji: "😄", 
-      date: new Date(Date.now() - 259200000),
-      note: "Finished a project I was working on!",
-      energy: 5,
-      sleep: 4,
-      stress: 1
-    }
-  ]);
+  const [moodHistory, setMoodHistory] = useState<MoodEntry[]>([]);
+  const [loading, setLoading] = useState(true);
   const { toast } = useToast();
+  const navigate = useNavigate();
+
+  // Fetch mood entries from Supabase
+  useEffect(() => {
+    const fetchMoodEntries = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user) {
+        navigate('/auth');
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('mood_entries')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching mood entries:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load mood entries",
+          variant: "destructive"
+        });
+      } else if (data) {
+        const entries: MoodEntry[] = data.map(entry => ({
+          id: entry.id,
+          mood: entry.mood,
+          emoji: moodOptions.find(m => m.value === entry.mood)?.emoji || "😐",
+          date: new Date(entry.created_at),
+          note: entry.notes || undefined,
+          energy: entry.energy_level,
+          sleep: entry.sleep_quality,
+          stress: entry.stress_level
+        }));
+        setMoodHistory(entries);
+      }
+      setLoading(false);
+    };
+
+    fetchMoodEntries();
+  }, [navigate, toast]);
 
   // Generate chart data for the last 7 days
   const chartData = useMemo(() => {
@@ -127,17 +143,58 @@ const Mood = () => {
     };
   }, [chartData]);
 
-  const saveMood = () => {
-    if (!selectedMood) return;
+  const saveMood = async () => {
+    if (!selectedMood) {
+      toast({
+        title: "Please select a mood",
+        description: "Choose how you're feeling before saving",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast({
+        title: "Not authenticated",
+        description: "Please sign in to save your mood",
+        variant: "destructive",
+      });
+      navigate('/auth');
+      return;
+    }
 
     const moodOption = moodOptions.find(m => m.value === selectedMood);
     if (!moodOption) return;
 
+    const { data, error } = await supabase
+      .from('mood_entries')
+      .insert({
+        user_id: user.id,
+        mood: selectedMood,
+        energy_level: energyLevel,
+        sleep_quality: sleepQuality,
+        stress_level: stressLevel,
+        hydration: hydrationLevel
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error saving mood:', error);
+      toast({
+        title: "Error",
+        description: "Failed to save mood entry",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const newEntry: MoodEntry = {
-      id: Date.now().toString(),
+      id: data.id,
       mood: selectedMood,
       emoji: moodOption.emoji,
-      date: new Date(),
+      date: new Date(data.created_at),
       energy: energyLevel,
       sleep: sleepQuality,
       stress: stressLevel,
