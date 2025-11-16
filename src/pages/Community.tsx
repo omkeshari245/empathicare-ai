@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Users, MessageCircle, Heart, Plus, Shield, Flag } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 interface Post {
   id: string;
@@ -21,55 +22,107 @@ interface Post {
 }
 
 const Community = () => {
-  const [posts, setPosts] = useState<Post[]>([
-    {
-      id: "1",
-      author: "MidnightDreamer",
-      avatar: "🌙",
-      content: "Having a rough week with anxiety. Anyone else find that journaling helps? I started writing down three things I'm grateful for each day and it's been surprisingly helpful.",
-      timestamp: new Date(Date.now() - 3600000),
-      likes: 12,
-      replies: 5,
-      tags: ["anxiety", "gratitude", "journaling"],
-      isAnonymous: true
-    },
-    {
-      id: "2", 
-      author: "SunnyVibes",
-      avatar: "☀️",
-      content: "Celebrating a small win today - I went for a walk outside instead of staying in bed all day. It wasn't long, but it's progress! 🌱",
-      timestamp: new Date(Date.now() - 7200000),
-      likes: 18,
-      replies: 8,
-      tags: ["progress", "selfcare", "movement"],
-      isAnonymous: true
-    },
-    {
-      id: "3",
-      author: "QuietStrength", 
-      avatar: "🦋",
-      content: "Reminder that healing isn't linear. Some days are harder than others, and that's okay. You're still moving forward even when it doesn't feel like it. 💙",
-      timestamp: new Date(Date.now() - 14400000),
-      likes: 25,
-      replies: 12,
-      tags: ["healing", "reminder", "encouragement"],
-      isAnonymous: true
-    }
-  ]);
-
+  const [posts, setPosts] = useState<Post[]>([]);
   const [newPost, setNewPost] = useState("");
   const [showNewPost, setShowNewPost] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [profiles, setProfiles] = useState<Record<string, string>>({});
   const { toast } = useToast();
+  const navigate = useNavigate();
 
-  const createPost = () => {
+  // Fetch posts from Supabase
+  useEffect(() => {
+    const fetchPosts = async () => {
+      const { data: postsData, error } = await supabase
+        .from('peer_support_posts')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching posts:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load posts",
+          variant: "destructive"
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (postsData) {
+        // Fetch profiles for all unique user IDs
+        const userIds = [...new Set(postsData.map(post => post.user_id))];
+        const { data: profilesData } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .in('id', userIds);
+
+        const profilesMap: Record<string, string> = {};
+        profilesData?.forEach(profile => {
+          profilesMap[profile.id] = profile.username;
+        });
+        setProfiles(profilesMap);
+
+        const formattedPosts: Post[] = postsData.map(post => ({
+          id: post.id,
+          author: post.is_anonymous ? "Anonymous" : (profilesMap[post.user_id] || "User"),
+          avatar: ["🌸", "🌟", "🍀", "🌊", "🦋", "🌱", "☀️", "🌙"][Math.floor(Math.random() * 8)],
+          content: post.content,
+          timestamp: new Date(post.created_at),
+          likes: post.likes_count || 0,
+          replies: 0,
+          tags: [],
+          isAnonymous: post.is_anonymous || false
+        }));
+        setPosts(formattedPosts);
+      }
+      setLoading(false);
+    };
+
+    fetchPosts();
+  }, [toast]);
+
+  const createPost = async () => {
     if (!newPost.trim()) return;
 
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast({
+        title: "Not authenticated",
+        description: "Please sign in to create a post",
+        variant: "destructive",
+      });
+      navigate('/auth');
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('peer_support_posts')
+      .insert({
+        user_id: user.id,
+        content: newPost,
+        is_anonymous: true,
+        likes_count: 0
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating post:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create post",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const post: Post = {
-      id: Date.now().toString(),
-      author: "Anonymous" + Math.floor(Math.random() * 1000),
+      id: data.id,
+      author: "Anonymous",
       avatar: ["🌸", "🌟", "🍀", "🌊", "🦋", "🌱", "☀️", "🌙"][Math.floor(Math.random() * 8)],
       content: newPost,
-      timestamp: new Date(),
+      timestamp: new Date(data.created_at),
       likes: 0,
       replies: 0,
       tags: [],
