@@ -2,10 +2,12 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Heart, Send, ArrowLeft, AlertTriangle, Phone } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Heart, Send, ArrowLeft, AlertTriangle, Phone, MessageSquare, Plus } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
 interface Message {
   id: string;
@@ -16,18 +18,15 @@ interface Message {
 }
 
 const Chat = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: "Hi there! I'm your AI wellness companion. I'm here to listen without judgment and support you on your mental health journey. How are you feeling today? 💙",
-      isUser: false,
-      timestamp: new Date(),
-    }
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -36,6 +35,137 @@ const Chat = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    loadConversations();
+  }, []);
+
+  const loadConversations = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      navigate('/auth');
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('chat_conversations')
+      .select('*')
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      console.error('Error loading conversations:', error);
+    } else {
+      setConversations(data || []);
+      if (data && data.length > 0) {
+        loadConversation(data[0].id);
+      } else {
+        createNewConversation();
+      }
+    }
+    setIsLoadingConversations(false);
+  };
+
+  const loadConversation = async (conversationId: string) => {
+    setCurrentConversationId(conversationId);
+    
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Error loading messages:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load conversation",
+        variant: "destructive",
+      });
+    } else {
+      const loadedMessages = data.map(msg => ({
+        id: msg.id,
+        content: msg.content,
+        isUser: msg.is_user,
+        timestamp: new Date(msg.created_at),
+      }));
+      
+      if (loadedMessages.length === 0) {
+        setMessages([{
+          id: '1',
+          content: "Hi there! I'm your AI wellness companion. I'm here to listen without judgment and support you on your mental health journey. How are you feeling today? 💙",
+          isUser: false,
+          timestamp: new Date(),
+        }]);
+      } else {
+        setMessages(loadedMessages);
+      }
+    }
+  };
+
+  const createNewConversation = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+
+    const { data, error } = await supabase
+      .from('chat_conversations')
+      .insert([{ user_id: session.user.id }])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating conversation:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create new conversation",
+        variant: "destructive",
+      });
+    } else {
+      setCurrentConversationId(data.id);
+      setConversations(prev => [data, ...prev]);
+      setMessages([{
+        id: '1',
+        content: "Hi there! I'm your AI wellness companion. I'm here to listen without judgment and support you on your mental health journey. How are you feeling today? 💙",
+        isUser: false,
+        timestamp: new Date(),
+      }]);
+    }
+  };
+
+  const saveMessage = async (content: string, isUser: boolean) => {
+    if (!currentConversationId) return;
+
+    const { error } = await supabase
+      .from('chat_messages')
+      .insert([{
+        conversation_id: currentConversationId,
+        content,
+        is_user: isUser,
+      }]);
+
+    if (error) {
+      console.error('Error saving message:', error);
+    }
+
+    // Update conversation timestamp
+    await supabase
+      .from('chat_conversations')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', currentConversationId);
+  };
+
+  const updateConversationTitle = async (firstUserMessage: string) => {
+    if (!currentConversationId) return;
+    
+    const title = firstUserMessage.slice(0, 50) + (firstUserMessage.length > 50 ? '...' : '');
+    await supabase
+      .from('chat_conversations')
+      .update({ title })
+      .eq('id', currentConversationId);
+    
+    setConversations(prev => prev.map(conv => 
+      conv.id === currentConversationId ? { ...conv, title } : conv
+    ));
+  };
 
   // Mock crisis detection - in real app this would use NLP
   const detectCrisisKeywords = (message: string): boolean => {
@@ -152,6 +282,8 @@ const Chat = () => {
         }
       }
 
+      // Save assistant message
+      await saveMessage(assistantContent, false);
       setIsTyping(false);
     } catch (e) {
       console.error("Stream error:", e);
@@ -165,7 +297,7 @@ const Chat = () => {
   };
 
   const sendMessage = async () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() || !currentConversationId) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -178,6 +310,14 @@ const Chat = () => {
     const messageText = inputValue;
     setInputValue("");
     setIsTyping(true);
+
+    // Save user message
+    await saveMessage(messageText, true);
+
+    // Update conversation title with first user message
+    if (messages.length === 1) {
+      await updateConversationTitle(messageText);
+    }
 
     // Check for crisis keywords
     if (detectCrisisKeywords(messageText)) {
@@ -209,6 +349,43 @@ const Chat = () => {
                 <ArrowLeft className="w-4 h-4" />
               </Button>
             </Link>
+            
+            <Sheet>
+              <SheetTrigger asChild>
+                <Button variant="ghost" size="sm">
+                  <MessageSquare className="w-4 h-4" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left">
+                <SheetHeader>
+                  <SheetTitle>Conversations</SheetTitle>
+                </SheetHeader>
+                <div className="mt-4 space-y-2">
+                  <Button 
+                    onClick={createNewConversation} 
+                    className="w-full justify-start"
+                    variant="outline"
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    New Conversation
+                  </Button>
+                  <ScrollArea className="h-[calc(100vh-200px)]">
+                    {conversations.map((conv) => (
+                      <Button
+                        key={conv.id}
+                        variant={currentConversationId === conv.id ? "secondary" : "ghost"}
+                        className="w-full justify-start mb-2 text-left"
+                        onClick={() => loadConversation(conv.id)}
+                      >
+                        <MessageSquare className="w-4 h-4 mr-2 flex-shrink-0" />
+                        <span className="truncate">{conv.title}</span>
+                      </Button>
+                    ))}
+                  </ScrollArea>
+                </div>
+              </SheetContent>
+            </Sheet>
+
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center">
                 <Heart className="w-4 h-4 text-primary-foreground" />
